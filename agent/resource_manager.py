@@ -76,7 +76,7 @@ def make_resource_decision(region: str):
             "message": "Missing telemetry readings."
         }
 
-    alternate_region = "UAE North" if region == "Central India" else "Central India"
+    alternate_region = "Korea Central" if region == "Central India" else "Central India"
 
     alt_cpu = get_latest_value(alternate_region, "CPU_UTIL")
     alt_latency = get_latest_value(alternate_region, "LATENCY_MS")
