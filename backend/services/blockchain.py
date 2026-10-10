@@ -15,8 +15,11 @@ def calculate_hash(block_data: dict) -> str:
     return hashlib.sha256(block_string).hexdigest()
 
 
-def add_transaction_to_ledger(transaction_id: int):
-    connection = get_db_connection()
+def add_transaction_to_ledger(transaction_id: int, conn=None):
+    # If a connection is passed in, the caller owns the transaction
+    # (commit / rollback / close). Otherwise we manage our own.
+    owns_connection = conn is None
+    connection = conn if conn is not None else get_db_connection()
     cursor = connection.cursor()
 
     try:
@@ -38,10 +41,12 @@ def add_transaction_to_ledger(transaction_id: int):
         if not transaction:
             raise ValueError("Transaction not found.")
 
-        # Get previous block hash
+        # Get previous block hash. UPDLOCK + HOLDLOCK keeps the lock until the
+        # transaction ends, so concurrent writers queue up and cannot both
+        # build on the same previous block (which would fork the chain).
         cursor.execute("""
             SELECT TOP 1 current_hash
-            FROM LedgerBlocks
+            FROM LedgerBlocks WITH (UPDLOCK, HOLDLOCK)
             ORDER BY block_id DESC
         """)
 
@@ -92,7 +97,8 @@ def add_transaction_to_ledger(transaction_id: int):
         current_hash,
         timestamp)
 
-        connection.commit()
+        if owns_connection:
+            connection.commit()
 
         return {
             "message": "Ledger block created successfully",
@@ -102,12 +108,14 @@ def add_transaction_to_ledger(transaction_id: int):
         }
 
     except Exception:
-        connection.rollback()
+        if owns_connection:
+            connection.rollback()
         raise
 
     finally:
         cursor.close()
-        connection.close()
+        if owns_connection:
+            connection.close()
 
 
 def verify_ledger():
