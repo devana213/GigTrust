@@ -17,14 +17,18 @@ if (apiUrl) {
   apiUrl.textContent = `Backend: ${API}`;
 }
 
-document.getElementById("logoutBtn").addEventListener("click", () => {
-  localStorage.clear();
-  window.location.href = "index.html";
-});
+const logoutBtn = document.getElementById("logoutBtn");
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", () => {
+    localStorage.clear();
+    window.location.href = "index.html";
+  });
+}
 
 async function check(path, statusId, dotId) {
   const status = document.getElementById(statusId);
   const dot = document.getElementById(dotId);
+  if (!status || !dot) return;
 
   status.textContent = "Checking...";
   dot.className = "status-dot";
@@ -55,5 +59,10 @@ async function loadHealth() {
   ]);
 }
 
-document.getElementById("refreshHealth").addEventListener("click", loadHealth);
-loadHealth();
+const refreshBtn = document.getElementById("refreshHealth");
+if (refreshBtn) {
+  refreshBtn.addEventListener("click", loadHealth);
+}
+if (document.getElementById("sqlStatus")) {
+  loadHealth();
+}

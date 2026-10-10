@@ -143,9 +143,20 @@ document.getElementById("authForm").addEventListener("submit", async (event) => 
       }),
     });
 
-    const data = await response.json();
+        const data = await response.json();
 
     if (data.status !== "success") {
+      if (data.message && data.message.toLowerCase().includes("no") && data.message.toLowerCase().includes("account")) {
+        selectedMode = "register";
+        modeTabs.forEach((item) => {
+          item.classList.toggle("active", item.dataset.mode === "register");
+        });
+        updateForm();
+        message.className = "form-message";
+        message.textContent = "No account found with this email. Please create one below.";
+        submitButton.disabled = false;
+        return;
+      }
       throw new Error(data.message || "Login failed.");
     }
 
@@ -153,6 +164,7 @@ document.getElementById("authForm").addEventListener("submit", async (event) => 
     localStorage.setItem("gigtrust_role", data.user.role);
     localStorage.setItem("gigtrust_name", data.user.name);
     localStorage.setItem("gigtrust_email", data.user.email);
+    localStorage.setItem("gigtrust_user_id", data.user.id);
 
     if (data.user.role === "admin") {
       window.location.href = "admin-dashboard.html";

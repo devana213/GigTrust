@@ -10,7 +10,7 @@
   <aside class="sidebar">
     <div class="side-logo"><div class="logo small">G</div><span>GigTrust</span></div>
     <div class="role-pill">User</div>
-    <nav><a class="active" href="#">Dashboard</a><a href="#" onclick="return false;">Browse Gigs</a><a href="#" onclick="return false;">Contracts</a><a href="#" onclick="return false;">Escrow</a></nav>
+    <nav><a class="active" href="#">Dashboard</a></nav>
     <button id="logoutBtn" class="secondary-btn">Logout</button>
   </aside>
 
@@ -19,33 +19,171 @@
       <div>
         <p class="eyebrow">USER DASHBOARD</p>
         <h1>Welcome, <span id="welcomeName">GigTrust User</span></h1>
-        <p class="muted">Manage your jobs, contracts and secured payments.</p>
+        <p class="muted">Post gigs, review bids and manage secured payments.</p>
       </div>
       <div class="avatar">US</div>
     </header>
 
-    <section class="stats-grid"><article class="stat-card"><span>Posted Gigs</span><strong>3</strong><small>Demo data</small></article><article class="stat-card"><span>Active Contracts</span><strong>2</strong><small>Demo data</small></article><article class="stat-card"><span>Escrow</span><strong>₹24K</strong><small>Demo data</small></article><article class="stat-card"><span>Completed</span><strong>8</strong><small>Demo data</small></article></section>
-
     <section class="content-grid">
       <article class="panel">
-        <div class="panel-title">
-          <h2>Live Backend Connection</h2>
-          <button id="refreshHealth">Refresh</button>
-        </div>
-        <div class="health-row"><div><span class="status-dot" id="sqlDot"></span><strong>Azure SQL</strong></div><span id="sqlStatus">Checking...</span></div>
-        <div class="health-row"><div><span class="status-dot" id="mongoDot"></span><strong>MongoDB</strong></div><span id="mongoStatus">Checking...</span></div>
-        <div class="health-row"><div><span class="status-dot" id="cassandraDot"></span><strong>Cassandra</strong></div><span id="cassandraStatus">Checking...</span></div>
-        <p class="api-url" id="apiUrl"></p>
+        <h2>Post a New Gig</h2>
+        <form id="postGigForm">
+          <label for="gigTitle">Title</label>
+          <input id="gigTitle" type="text" placeholder="e.g. Build a landing page" required>
+
+          <label for="gigDescription">Description</label>
+          <textarea id="gigDescription" rows="3" placeholder="Describe what you need" required></textarea>
+
+          <label for="gigBudget">Budget (Rs)</label>
+          <input id="gigBudget" type="number" min="1" step="1" placeholder="5000" required>
+
+          <button type="submit" id="postGigBtn" class="primary-btn">Post Gig</button>
+        </form>
+        <p class="form-message" id="postGigMessage"></p>
       </article>
 
       <article class="panel">
-        <h2>Review Prototype</h2>
-        <p class="muted">This role-based dashboard is intentionally simple for the current review. Marketplace features can be added for the final review.</p>
+        <h2>Your Posted Gigs</h2>
+        <div id="myGigsList"><p class="muted">Loading...</p></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>All Open Gigs (Marketplace Feed)</h2>
+        <div id="allGigsList"><p class="muted">Loading...</p></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>My Contracts &amp; Escrow</h2>
+        <div id="contracts-panel" data-role="client"></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>Transaction History (Ledger)</h2>
+        <div id="transactions-panel"></div>
       </article>
     </section>
   </main>
 
   <script src="config.js"></script>
   <script src="dashboard-common.js"></script>
+  <script src="marketplace.js"></script>
+  <script src="contracts.js"></script>
+  <script>
+    async function loadMyGigs() {
+      const container = document.getElementById("myGigsList");
+      const userId = getUserId();
+      const res = await fetch(`${API}/users/${userId}/gigs`);
+      const data = await res.json();
+      if (data.status !== "success" || data.gigs.length === 0) {
+        container.innerHTML = '<p class="muted">You have not posted any gigs yet.</p>';
+        return;
+      }
+
+      let html = "";
+      for (const g of data.gigs) {
+        const bidsData = await fetchBids(g.gig_id);
+        const bids = bidsData.status === "success" ? bidsData.bids : [];
+        html += `
+          <div class="gig-card">
+            <div class="gig-card-header">
+              <strong>${g.title}</strong>
+              <span class="badge badge-${g.status.toLowerCase()}">${g.status}</span>
+            </div>
+            <p class="muted">${g.description}</p>
+            <div class="gig-card-footer">
+              <span>${formatMoney(g.budget)}</span>
+              <span>${timeAgo(g.created_at)}</span>
+            </div>
+            ${bids.length > 0 ? `
+              <div style="margin-top:12px; border-top:1px solid #e5e7eb; padding-top:12px;">
+                <strong style="font-size:13px;">Bids (${bids.length})</strong>
+                ${bids.map(b => `
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                    <div>
+                      <div>${b.freelancer_name} - ${formatMoney(b.bid_amount)}</div>
+                      <div class="muted" style="font-size:12px;">${b.proposal}</div>
+                    </div>
+                    ${b.status === "PENDING" ? `<button class="primary-btn small-btn" onclick="acceptThisBid(${b.bid_id})">Accept</button>` : `<span class="badge badge-${b.status.toLowerCase()}">${b.status}</span>`}
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+          </div>
+        `;
+      }
+      container.innerHTML = html;
+    }
+
+    async function acceptThisBid(bidId) {
+      const result = await acceptBid(bidId);
+      if (result.status === "success") {
+        alert(`Bid accepted! Contract #${result.contract_id} created, Escrow #${result.escrow_id} is now UNFUNDED. Fund it to proceed.`);
+        loadMyGigs();
+        loadAllGigs();
+        gtRefreshAll();
+      } else {
+        alert(result.message || result.error || "Failed to accept bid.");
+      }
+    }
+
+    async function loadAllGigs() {
+      const container = document.getElementById("allGigsList");
+      const data = await fetchGigs();
+      if (data.status !== "success" || data.gigs.length === 0) {
+        container.innerHTML = '<p class="muted">No gigs posted yet.</p>';
+        return;
+      }
+      container.innerHTML = data.gigs.map(g => `
+        <div class="gig-card">
+          <div class="gig-card-header">
+            <strong>${g.title}</strong>
+            <span class="badge badge-${g.status.toLowerCase()}">${g.status}</span>
+          </div>
+          <p class="muted">${g.description}</p>
+          <div class="gig-card-footer">
+            <span>${formatMoney(g.budget)} by ${g.client_name}</span>
+            <span>${timeAgo(g.created_at)}</span>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    document.getElementById("postGigForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("postGigBtn");
+      const msg = document.getElementById("postGigMessage");
+      btn.disabled = true;
+      btn.textContent = "Posting...";
+
+      const title = document.getElementById("gigTitle").value.trim();
+      const description = document.getElementById("gigDescription").value.trim();
+      const budget = document.getElementById("gigBudget").value;
+
+      const result = await postGig(title, description, budget);
+
+      if (result.status === "success") {
+        msg.className = "form-message success";
+        msg.textContent = "Gig posted successfully!";
+        document.getElementById("postGigForm").reset();
+        loadMyGigs();
+        loadAllGigs();
+      } else {
+        msg.className = "form-message";
+        msg.textContent = result.error || "Failed to post gig.";
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Post Gig";
+    });
+
+    loadMyGigs();
+    loadAllGigs();
+  </script>
 </body>
 </html>

@@ -10,7 +10,7 @@
   <aside class="sidebar">
     <div class="side-logo"><div class="logo small">G</div><span>GigTrust</span></div>
     <div class="role-pill">Freelancer</div>
-    <nav><a class="active" href="#">Dashboard</a><a href="#" onclick="return false;">Find Gigs</a><a href="#" onclick="return false;">My Bids</a><a href="#" onclick="return false;">Earnings</a></nav>
+    <nav><a class="active" href="#">Dashboard</a></nav>
     <button id="logoutBtn" class="secondary-btn">Logout</button>
   </aside>
 
@@ -19,33 +19,189 @@
       <div>
         <p class="eyebrow">FREELANCER DASHBOARD</p>
         <h1>Welcome, <span id="welcomeName">GigTrust User</span></h1>
-        <p class="muted">Track bids, active work and earnings.</p>
+        <p class="muted">Browse open gigs and submit bids.</p>
       </div>
       <div class="avatar">FR</div>
     </header>
 
-    <section class="stats-grid"><article class="stat-card"><span>Active Bids</span><strong>7</strong><small>Demo data</small></article><article class="stat-card"><span>Contracts</span><strong>4</strong><small>Demo data</small></article><article class="stat-card"><span>Pending</span><strong>₹18.5K</strong><small>Demo data</small></article><article class="stat-card"><span>Completed</span><strong>12</strong><small>Demo data</small></article></section>
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>Open Gigs</h2>
+        <div id="openGigsList"><p class="muted">Loading...</p></div>
+      </article>
+    </section>
 
     <section class="content-grid">
-      <article class="panel">
-        <div class="panel-title">
-          <h2>Live Backend Connection</h2>
-          <button id="refreshHealth">Refresh</button>
-        </div>
-        <div class="health-row"><div><span class="status-dot" id="sqlDot"></span><strong>Azure SQL</strong></div><span id="sqlStatus">Checking...</span></div>
-        <div class="health-row"><div><span class="status-dot" id="mongoDot"></span><strong>MongoDB</strong></div><span id="mongoStatus">Checking...</span></div>
-        <div class="health-row"><div><span class="status-dot" id="cassandraDot"></span><strong>Cassandra</strong></div><span id="cassandraStatus">Checking...</span></div>
-        <p class="api-url" id="apiUrl"></p>
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>My Bids</h2>
+        <div id="myBidsList"><p class="muted">Loading...</p></div>
       </article>
+    </section>
 
-      <article class="panel">
-        <h2>Review Prototype</h2>
-        <p class="muted">This role-based dashboard is intentionally simple for the current review. Marketplace features can be added for the final review.</p>
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>My Contracts &amp; Escrow</h2>
+        <div id="contracts-panel" data-role="freelancer"></div>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel" style="grid-column: 1 / -1;">
+        <h2>Transaction History (Ledger)</h2>
+        <div id="transactions-panel"></div>
       </article>
     </section>
   </main>
 
+  <div id="bidModalOverlay" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h3 id="bidModalTitle">Place a Bid</h3>
+      <form id="bidForm">
+        <label for="bidAmount">Your Bid Amount (Rs)</label>
+        <input id="bidAmount" type="number" min="1" step="1" required>
+        <label for="bidProposal">Proposal</label>
+        <textarea id="bidProposal" rows="3" placeholder="Explain why you're a good fit" required></textarea>
+        <div class="modal-actions">
+          <button type="button" id="bidCancelBtn" class="secondary-btn">Cancel</button>
+          <button type="submit" id="bidSubmitBtn" class="primary-btn">Submit Bid</button>
+        </div>
+      </form>
+      <p class="form-message" id="bidModalMessage"></p>
+    </div>
+  </div>
+
   <script src="config.js"></script>
   <script src="dashboard-common.js"></script>
+  <script src="marketplace.js"></script>
+  <script src="contracts.js"></script>
+  <script>
+    let activeBidGigId = null;
+
+    async function loadOpenGigs() {
+      const container = document.getElementById("openGigsList");
+      const data = await fetchGigs();
+      if (data.status !== "success" || data.gigs.length === 0) {
+        container.innerHTML = '<p class="muted">No open gigs right now.</p>';
+        return;
+      }
+      const openOnly = data.gigs.filter(g => g.status === "OPEN");
+      if (openOnly.length === 0) {
+        container.innerHTML = '<p class="muted">No open gigs right now.</p>';
+        return;
+      }
+
+      const myId = parseInt(getUserId());
+      let html = "";
+
+      for (const g of openOnly) {
+        const bidsData = await fetchBids(g.gig_id);
+        const myBid = bidsData.status === "success"
+          ? bidsData.bids.find(b => b.freelancer_id === myId)
+          : null;
+
+        const actionHtml = myBid
+          ? `<span class="badge badge-${myBid.status.toLowerCase()}">You bid ${formatMoney(myBid.bid_amount)} - ${myBid.status}</span>`
+          : `<button class="primary-btn small-btn" onclick="openBidModal(${g.gig_id}, '${g.title.replace(/'/g, "\\'")}')">Place Bid</button>`;
+
+        html += `
+          <div class="gig-card">
+            <div class="gig-card-header">
+              <strong>${g.title}</strong>
+              <span class="badge badge-${g.status.toLowerCase()}">${g.status}</span>
+            </div>
+            <p class="muted">${g.description}</p>
+            <div class="gig-card-footer">
+              <span>${formatMoney(g.budget)} by ${g.client_name}</span>
+              ${actionHtml}
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    async function loadMyBids() {
+      const container = document.getElementById("myBidsList");
+      const data = await fetchGigs();
+      if (data.status !== "success") {
+        container.innerHTML = '<p class="muted">Could not load bids.</p>';
+        return;
+      }
+      const myId = parseInt(getUserId());
+      let allBids = [];
+      for (const gig of data.gigs) {
+        const bidsData = await fetchBids(gig.gig_id);
+        if (bidsData.status === "success") {
+          const mine = bidsData.bids.filter(b => b.freelancer_id === myId).map(b => ({ ...b, gigTitle: gig.title }));
+          allBids = allBids.concat(mine);
+        }
+      }
+      if (allBids.length === 0) {
+        container.innerHTML = '<p class="muted">You have not placed any bids yet.</p>';
+        return;
+      }
+      container.innerHTML = allBids.map(b => `
+        <div class="gig-card">
+          <div class="gig-card-header">
+            <strong>${b.gigTitle}</strong>
+            <span class="badge badge-${b.status.toLowerCase()}">${b.status}</span>
+          </div>
+          <p class="muted">${b.proposal}</p>
+          <div class="gig-card-footer">
+            <span>Your bid: ${formatMoney(b.bid_amount)}</span>
+            <span>${timeAgo(b.created_at)}</span>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function openBidModal(gigId, gigTitle) {
+      activeBidGigId = gigId;
+      document.getElementById("bidModalTitle").textContent = `Place a Bid: ${gigTitle}`;
+      document.getElementById("bidModalMessage").textContent = "";
+      document.getElementById("bidForm").reset();
+      document.getElementById("bidModalOverlay").classList.remove("hidden");
+    }
+
+    function closeBidModal() {
+      document.getElementById("bidModalOverlay").classList.add("hidden");
+      activeBidGigId = null;
+    }
+
+    document.getElementById("bidCancelBtn").addEventListener("click", closeBidModal);
+
+    document.getElementById("bidForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("bidSubmitBtn");
+      const msg = document.getElementById("bidModalMessage");
+      btn.disabled = true;
+      btn.textContent = "Submitting...";
+
+      const amount = document.getElementById("bidAmount").value;
+      const proposal = document.getElementById("bidProposal").value.trim();
+
+      const result = await placeBid(activeBidGigId, amount, proposal);
+
+      if (result.status === "success") {
+        msg.className = "form-message success";
+        msg.textContent = "Bid submitted!";
+        setTimeout(() => {
+          closeBidModal();
+          loadOpenGigs();
+          loadMyBids();
+        }, 800);
+      } else {
+        msg.className = "form-message";
+        msg.textContent = result.error || "Failed to submit bid.";
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Submit Bid";
+    });
+
+    loadOpenGigs();
+    loadMyBids();
+  </script>
 </body>
 </html>
