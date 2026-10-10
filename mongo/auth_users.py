@@ -2,34 +2,23 @@ import os
 import base64
 import hashlib
 import hmac
-from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from pymongo import MongoClient, ASCENDING
-from pymongo.errors import DuplicateKeyError
+from backend.database import get_db_connection
 
 load_dotenv()
-
-MONGO_URI = os.getenv("MONGO_URI")
-MONGO_DATABASE = os.getenv("MONGO_DATABASE", "gigtrust")
-AUTH_COLLECTION = os.getenv("MONGO_AUTH_COLLECTION", "users")
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@gigtrust.com").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
-
-def _get_collection():
-    if not MONGO_URI:
-        raise RuntimeError("MONGO_URI is not configured.")
-
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
-    client.admin.command("ping")
-
-    collection = client[MONGO_DATABASE][AUTH_COLLECTION]
-    collection.create_index([("email", ASCENDING)], unique=True)
-    return client, collection
+def _to_db_role(role: str) -> str:
+    mapping = {"user": "CLIENT", "freelancer": "FREELANCER", "admin": "ADMIN"}
+    return mapping.get(role, role.upper())
 
 
+def _from_db_role(role: str) -> str:
+    mapping = {"CLIENT": "user", "FREELANCER": "freelancer", "ADMIN": "admin"}
+    return mapping.get(role, role.lower())
 def _hash_password(password: str) -> str:
     salt = os.urandom(16)
     iterations = 200_000
@@ -39,7 +28,6 @@ def _hash_password(password: str) -> str:
         salt,
         iterations,
     )
-
     return "$".join(
         [
             "pbkdf2_sha256",
@@ -55,19 +43,15 @@ def _verify_password(password: str, encoded: str) -> bool:
         algorithm, iterations, salt_b64, hash_b64 = encoded.split("$", 3)
         if algorithm != "pbkdf2_sha256":
             return False
-
         salt = base64.b64decode(salt_b64)
         expected = base64.b64decode(hash_b64)
-
         actual = hashlib.pbkdf2_hmac(
             "sha256",
             password.encode("utf-8"),
             salt,
             int(iterations),
         )
-
         return hmac.compare_digest(actual, expected)
-
     except Exception:
         return False
 
@@ -82,62 +66,64 @@ def register_account(name: str, email: str, password: str, role: str):
             "status": "failed",
             "message": "Only user and freelancer accounts can self-register.",
         }
-
     if not name:
         return {"status": "failed", "message": "Name is required."}
-
     if "@" not in email:
         return {"status": "failed", "message": "Enter a valid email address."}
-
     if len(password) < 6:
         return {
             "status": "failed",
             "message": "Password must contain at least 6 characters.",
         }
 
-    client = None
-
+    conn = None
     try:
-        client, collection = _get_collection()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-        document = {
-            "name": name,
-            "email": email,
-            "password_hash": _hash_password(password),
-            "role": role,
-            "created_at": datetime.now(timezone.utc),
-            "account_status": "active",
-        }
+        cursor.execute("SELECT user_id FROM Users WHERE email = ?", email)
+        if cursor.fetchone():
+            return {
+                "status": "failed",
+                "message": "An account with this email already exists.",
+            }
 
-        result = collection.insert_one(document)
+        password_hash = _hash_password(password)
+
+        cursor.execute(
+            """
+            INSERT INTO Users (full_name, email, password_hash, role, balance, created_at)
+            OUTPUT INSERTED.user_id
+            VALUES (?, ?, ?, ?, 0, SYSUTCDATETIME())
+            """,
+            name, email, password_hash, _to_db_role(role),
+)
+        new_id = cursor.fetchone()[0]
+        conn.commit()
 
         return {
             "status": "success",
             "message": f"{role.capitalize()} account created.",
             "user": {
-                "id": str(result.inserted_id),
+                "id": str(new_id),
                 "name": name,
                 "email": email,
                 "role": role,
             },
         }
-
-    except DuplicateKeyError:
-        return {
-            "status": "failed",
-            "message": "An account with this email already exists.",
-        }
-
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return {"status": "failed", "message": "Registration failed.", "error": str(e)}
     finally:
-        if client:
-            client.close()
+        if conn:
+            conn.close()
 
 
 def login_account(email: str, password: str, role: str):
     role = role.strip().lower()
     email = email.strip().lower()
 
-    # Admin credentials are fixed and are NOT stored in MongoDB.
     if role == "admin":
         if email == ADMIN_EMAIL and hmac.compare_digest(password, ADMIN_PASSWORD):
             return {
@@ -149,44 +135,45 @@ def login_account(email: str, password: str, role: str):
                     "role": "admin",
                 },
             }
-
-        return {
-            "status": "failed",
-            "message": "Invalid admin credentials.",
-        }
+        return {"status": "failed", "message": "Invalid admin credentials."}
 
     if role not in {"user", "freelancer"}:
         return {"status": "failed", "message": "Invalid role."}
 
-    client = None
-
+    conn = None
     try:
-        client, collection = _get_collection()
-        account = collection.find_one({"email": email, "role": role})
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-        if not account:
+        cursor.execute(
+            "SELECT user_id, full_name, email, password_hash, role FROM Users WHERE email = ? AND role = ?",
+             email, _to_db_role(role),
+)
+        row = cursor.fetchone()
+
+        if not row:
             return {
                 "status": "failed",
                 "message": f"No {role} account was found for this email.",
             }
 
-        if not _verify_password(password, account.get("password_hash", "")):
-            return {
-                "status": "failed",
-                "message": "Invalid email or password.",
-            }
+        user_id, full_name, db_email, password_hash, db_role = row
+
+        if not _verify_password(password, password_hash or ""):
+            return {"status": "failed", "message": "Invalid email or password."}
 
         return {
             "status": "success",
             "message": "Login successful.",
             "user": {
-                "id": str(account["_id"]),
-                "name": account.get("name", ""),
-                "email": account["email"],
-                "role": account["role"],
+                "id": str(user_id),
+                "name": full_name,
+                "email": db_email,
+                "role": _from_db_role(db_role),
             },
         }
-
+    except Exception as e:
+        return {"status": "failed", "message": "Login failed.", "error": str(e)}
     finally:
-        if client:
-            client.close()
+        if conn:
+            conn.close()
