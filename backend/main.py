@@ -422,6 +422,18 @@ def create_bid(request: BidCreateRequest, background: BackgroundTasks):
         cursor = conn.cursor()
         if _role_of(cursor, request.freelancer_id) != "FREELANCER":
             return _denied("Only a freelancer account can place bids.")
+        cursor.execute("SELECT status FROM Gigs WHERE gig_id = ?", request.gig_id)
+        gig_row = cursor.fetchone()
+        if not gig_row:
+            return _denied("Gig not found.")
+        if gig_row[0] != "OPEN":
+            return _denied(f"This gig is {gig_row[0]} and no longer accepts bids.")
+        cursor.execute(
+            "SELECT 1 FROM Bids WHERE gig_id = ? AND freelancer_id = ?",
+            request.gig_id, request.freelancer_id,
+        )
+        if cursor.fetchone():
+            return _denied("You have already placed a bid on this gig.")
         cursor.execute(
             "INSERT INTO Bids (gig_id, freelancer_id, bid_amount, proposal, status, created_at) OUTPUT INSERTED.bid_id VALUES (?, ?, ?, ?, 'PENDING', SYSUTCDATETIME())",
             request.gig_id, request.freelancer_id, request.bid_amount, request.proposal,
