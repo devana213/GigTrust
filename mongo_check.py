@@ -22,7 +22,7 @@ with urllib.request.urlopen(req, timeout=60) as r:
 
 client = MongoClient(os.getenv("MONGO_URI"), directConnection=True, tls=True,
                      serverSelectionTimeoutMS=20000)
-coll = client[os.getenv("MONGO_DATABASE")][os.getenv("MONGO_COLLECTION")]
+coll = client[os.getenv("MONGO_DATABASE", "gigtrust")][os.getenv("MONGO_COLLECTION", "activity_logs")]
 
 docs = list(coll.find().sort("_id", -1).limit(200))
 print(f"\n[2] Documents read back (latest 200 max): {len(docs)}")
