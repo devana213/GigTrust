@@ -9,7 +9,10 @@ from backend.database import get_db_connection
 load_dotenv()
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@gigtrust.com").strip().lower()
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+# No built-in fallback: admin login stays disabled until a real password is set in .env.
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or ""
+_INSECURE_ADMIN_PASSWORDS = {"", "admin123", "admin", "password"}
+
 
 def _to_db_role(role: str) -> str:
     mapping = {"user": "CLIENT", "freelancer": "FREELANCER", "admin": "ADMIN"}
@@ -19,6 +22,8 @@ def _to_db_role(role: str) -> str:
 def _from_db_role(role: str) -> str:
     mapping = {"CLIENT": "user", "FREELANCER": "freelancer", "ADMIN": "admin"}
     return mapping.get(role, role.lower())
+
+
 def _hash_password(password: str) -> str:
     salt = os.urandom(16)
     iterations = 200_000
@@ -97,7 +102,7 @@ def register_account(name: str, email: str, password: str, role: str):
             VALUES (?, ?, ?, ?, 0, SYSUTCDATETIME())
             """,
             name, email, password_hash, _to_db_role(role),
-)
+        )
         new_id = cursor.fetchone()[0]
         conn.commit()
 
@@ -125,7 +130,14 @@ def login_account(email: str, password: str, role: str):
     email = email.strip().lower()
 
     if role == "admin":
-        if email == ADMIN_EMAIL and hmac.compare_digest(password, ADMIN_PASSWORD):
+        if ADMIN_PASSWORD.lower() in _INSECURE_ADMIN_PASSWORDS:
+            return {
+                "status": "failed",
+                "message": "Admin login is disabled until ADMIN_PASSWORD is set to a non-default value in .env.",
+            }
+        if email == ADMIN_EMAIL and hmac.compare_digest(
+            password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")
+        ):
             return {
                 "status": "success",
                 "message": "Admin login successful.",
@@ -147,8 +159,8 @@ def login_account(email: str, password: str, role: str):
 
         cursor.execute(
             "SELECT user_id, full_name, email, password_hash, role FROM Users WHERE email = ? AND role = ?",
-             email, _to_db_role(role),
-)
+            email, _to_db_role(role),
+        )
         row = cursor.fetchone()
 
         if not row:
